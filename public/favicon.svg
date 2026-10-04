@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" fill="none">
+  <rect width="48" height="48" rx="12" fill="#0B1122"/>
+  <rect x="1" y="1" width="46" height="46" rx="11" stroke="#06B6D4" stroke-opacity="0.3" stroke-width="2"/>
+  <!-- Road perspective -->
+  <path d="M12 40L18 10L30 10L36 40" fill="#0F172A" stroke="#38BDF8" stroke-width="2"/>
+  <!-- Center dashed line -->
+  <line x1="24" y1="12" x2="24" y2="18" stroke="#F59E0B" stroke-width="2" stroke-linecap="round"/>
+  <line x1="24" y1="23" x2="24" y2="31" stroke="#F59E0B" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="24" y1="35" x2="24" y2="40" stroke="#F59E0B" stroke-width="3" stroke-linecap="round"/>
+  <!-- Scan Laser -->
+  <line x1="8" y1="24" x2="40" y2="24" stroke="#00F0FF" stroke-width="2" filter="drop-shadow(0 0 4px #00F0FF)"/>
+  <!-- AI Node points -->
+  <circle cx="20" cy="24" r="2.5" fill="#EF4444"/>
+  <circle cx="28" cy="24" r="2.5" fill="#10B981"/>
+</svg>
