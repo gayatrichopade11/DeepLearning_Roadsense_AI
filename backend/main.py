@@ -38,10 +38,26 @@ app = FastAPI(
 )
 
 # CORS configuration for React frontend integration
+# Supports production Vercel domains via ALLOWED_ORIGINS env var (comma-separated).
+# Defaults to standard local development origins. Never combines wildcard with credentials.
+raw_origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
+if raw_origins:
+    allowed_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+else:
+    allowed_origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+# If wildcard is explicitly used, credentials must be disabled per CORS specification
+allow_credentials = False if "*" in allowed_origins else True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins for local dev (Vite default: http://localhost:5173)
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -222,3 +238,10 @@ async def analyze_frame(
         detections=analysis.get("detections", []),
         road_condition=analysis.get("road_condition", "unknown"),
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=port, reload=False)
