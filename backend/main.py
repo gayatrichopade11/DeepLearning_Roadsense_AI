@@ -38,18 +38,22 @@ app = FastAPI(
 )
 
 # CORS configuration for React frontend integration
-# Supports production Vercel domains via ALLOWED_ORIGINS env var (comma-separated).
-# Defaults to standard local development origins. Never combines wildcard with credentials.
+# Explicitly authorizes the production Vercel frontend, all Vercel preview domains via regex,
+# and any custom domains specified in ALLOWED_ORIGINS (comma-separated).
 raw_origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
+default_origins = [
+    "https://deep-learning-roadsense-ai.vercel.app",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
 if raw_origins:
-    allowed_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    custom_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    allowed_origins = list(dict.fromkeys(default_origins + custom_origins))
 else:
-    allowed_origins = [
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ]
+    allowed_origins = default_origins
 
 # If wildcard is explicitly used, credentials must be disabled per CORS specification
 allow_credentials = False if "*" in allowed_origins else True
@@ -57,6 +61,7 @@ allow_credentials = False if "*" in allowed_origins else True
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],

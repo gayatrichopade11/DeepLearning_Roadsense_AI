@@ -11,6 +11,7 @@ import {
   Info
 } from 'lucide-react';
 import ResultCard from '../components/ResultCard';
+import { API_ENDPOINTS, getApiBaseUrl } from '../utils/apiConfig';
 
 export default function Analyze() {
   const [selectedImage, setSelectedImage] = useState(null);
@@ -112,7 +113,7 @@ export default function Analyze() {
       const formData = new FormData();
       formData.append('file', fileToSend);
 
-      const API_URL = (import.meta.env?.VITE_API_URL || 'http://127.0.0.1:8000') + '/api/analyze/image';
+      const API_URL = API_ENDPOINTS.ANALYZE_IMAGE();
       const response = await fetch(API_URL, {
         method: 'POST',
         body: formData,
@@ -166,12 +167,11 @@ export default function Analyze() {
       });
     } catch (err) {
       console.error('Backend API request error:', err);
-      // Requirement 11: Show "ML backend unavailable. Please start the FastAPI server."
-      // Absolutely no fake/mock results
+      const targetBase = getApiBaseUrl();
       setAnalysisResult({
         status: 'error',
         error: 'ML backend unavailable. Please start the FastAPI server.',
-        errorDetails: err.message,
+        errorDetails: `Could not reach ${targetBase}. ${err.message}`,
         detections: [],
         boxes: [],
         road_condition: null,

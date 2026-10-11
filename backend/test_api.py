@@ -55,6 +55,33 @@ def run_tests():
     print("[PASS] Root metadata endpoint verified.")
     print("-" * 75)
 
+    # 3b. Documentation and OpenAPI Endpoints (/docs, /openapi.json)
+    res_docs = client.get("/docs")
+    print(f"GET /docs -> Status: {res_docs.status_code}")
+    assert res_docs.status_code == 200, f"/docs returned unexpected status: {res_docs.status_code}"
+    res_openapi = client.get("/openapi.json")
+    print(f"GET /openapi.json -> Status: {res_openapi.status_code}")
+    assert res_openapi.status_code == 200, f"/openapi.json returned unexpected status: {res_openapi.status_code}"
+    print("[PASS] /docs and /openapi.json endpoints verified.")
+    print("-" * 75)
+
+    # 3c. CORS Verification for Vercel Frontend Domain
+    vercel_origin = "https://deep-learning-roadsense-ai.vercel.app"
+    res_cors = client.options(
+        "/api/analyze/image",
+        headers={
+            "Origin": vercel_origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        }
+    )
+    print(f"OPTIONS /api/analyze/image (Origin: {vercel_origin}) -> Status: {res_cors.status_code}")
+    print(f"Access-Control-Allow-Origin: {res_cors.headers.get('access-control-allow-origin')}")
+    assert res_cors.status_code == 200
+    assert res_cors.headers.get("access-control-allow-origin") == vercel_origin
+    print("[PASS] Vercel frontend CORS authorization verified.")
+    print("-" * 75)
+
     # 4. POST /api/analyze/image with test images
     # Test with pothole sample from public/images
     sample_pothole = PROJECT_ROOT / "public" / "images" / "pothole_sample.jpg"
