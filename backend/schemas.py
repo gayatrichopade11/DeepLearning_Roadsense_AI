@@ -17,6 +17,8 @@ class Detection(BaseModel):
     class_name: str = Field(..., description="Human-readable class name: Pothole, Crack, Road_Patch")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score between 0.0 and 1.0")
     bbox: List[float] = Field(..., description="Bounding box coordinates in [x1, y1, x2, y2] format")
+    is_low_confidence: Optional[bool] = Field(default=False, description="Flag indicating tentative prediction (< 0.15)")
+    confidence_tier: Optional[str] = Field(default="confirmed", description="Confidence tier: confirmed (>=0.20), moderate (0.15-0.20), or tentative (<0.15)")
 
 
 class ImageAnalysisResponse(BaseModel):
@@ -29,7 +31,8 @@ class ImageAnalysisResponse(BaseModel):
     image_url: Optional[str] = Field(None, description="Public URL to access the saved image")
     saved_path: Optional[str] = Field(None, description="Server filepath where image is stored")
     detections: List[Detection] = Field(default_factory=list, description="List of detected road features/distresses")
-    road_condition: str = Field(default="unknown", description="Overall road condition: unknown, good, damaged, severe")
+    road_condition: str = Field(default="unknown", description="Overall road condition: unknown, good, monitored, damaged, severe")
+    effective_thresholds: Optional[dict] = Field(default=None, description="Per-class confidence thresholds applied during inference")
 
 
 class VideoAnalysisResponse(BaseModel):

@@ -55,6 +55,8 @@ ml/runs/
 # Old experimental models (keep only production best_clean_303.pt tracked)
 ml/models/best.pt
 ml/models/best_303.pt
+ml/models/best_v2*.pt
+ml/models/train_v2*.pt
 
 # Temporary & cache files
 .tempmediaStorage/

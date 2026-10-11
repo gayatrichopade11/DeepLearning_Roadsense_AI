@@ -48,7 +48,23 @@ export function getApiEndpoint(path) {
 
 export const API_ENDPOINTS = {
   HEALTH: () => getApiEndpoint('/health'),
-  ANALYZE_IMAGE: (conf) => getApiEndpoint(conf !== undefined ? `/api/analyze/image?conf=${conf}` : '/api/analyze/image'),
-  ANALYZE_FRAME: (conf) => getApiEndpoint(conf !== undefined ? `/api/analyze/frame?conf=${conf}` : '/api/analyze/frame'),
+  ANALYZE_IMAGE: (conf, classConf = {}) => {
+    const params = new URLSearchParams();
+    if (conf !== undefined && conf !== null) params.append('conf', conf);
+    if (classConf?.pothole !== undefined) params.append('conf_pothole', classConf.pothole);
+    if (classConf?.crack !== undefined) params.append('conf_crack', classConf.crack);
+    if (classConf?.road_patch !== undefined) params.append('conf_road_patch', classConf.road_patch);
+    const q = params.toString();
+    return getApiEndpoint(q ? `/api/analyze/image?${q}` : '/api/analyze/image');
+  },
+  ANALYZE_FRAME: (conf, classConf = {}) => {
+    const params = new URLSearchParams();
+    if (conf !== undefined && conf !== null) params.append('conf', conf);
+    if (classConf?.pothole !== undefined) params.append('conf_pothole', classConf.pothole);
+    if (classConf?.crack !== undefined) params.append('conf_crack', classConf.crack);
+    if (classConf?.road_patch !== undefined) params.append('conf_road_patch', classConf.road_patch);
+    const q = params.toString();
+    return getApiEndpoint(q ? `/api/analyze/frame?${q}` : '/api/analyze/frame');
+  },
   ANALYZE_VIDEO: () => getApiEndpoint('/api/analyze/video'),
 };

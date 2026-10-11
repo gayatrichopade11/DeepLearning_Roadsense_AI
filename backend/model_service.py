@@ -37,6 +37,13 @@ CLASS_NAMES = {
 }
 
 
+DEFAULT_CLASS_THRESHOLDS = {
+    0: 0.20,  # Pothole: 20% preserves current working pothole detection
+    1: 0.08,  # Crack: calibrated for subtle crack defects
+    2: 0.10,  # Road_Patch: calibrated for asphalt patches
+}
+
+
 class RoadSenseModelService:
     """
     Service managing YOLO model loading and inference for RoadSense AI.
@@ -113,29 +120,81 @@ class RoadSenseModelService:
             return "Road_Patch"
         return raw_name
 
-    def evaluate_condition(self, detections: List[Dict[str, Any]]) -> str:
+    def resolve_effective_thresholds(
+        self,
+        conf: Optional[float] = None,
+        class_thresholds: Optional[Dict[Union[int, str], float]] = None,
+    ) -> Dict[int, float]:
+        """
+        Calculates consistent per-class thresholds.
+        Ensures global confidence and class-specific overrides remain synchronized
+        without multi-stage truncation.
+        """
+        base_conf = float(conf) if conf is not None else 0.20
+
+        # Start with default calibrated thresholds
+        effective: Dict[int, float] = {cid: default_t for cid, default_t in DEFAULT_CLASS_THRESHOLDS.items()}
+
+        # If a global conf was explicitly specified and no class overrides are provided,
+        # use base_conf uniformly
+        if conf is not None and not class_thresholds:
+            for cid in effective:
+                effective[cid] = base_conf
+
+        # Apply specific class overrides if provided
+        if class_thresholds:
+            for k, val in class_thresholds.items():
+                if val is None:
+                    continue
+                v = float(val)
+                if isinstance(k, int) and k in CLASS_NAMES:
+                    effective[k] = v
+                elif isinstance(k, str):
+                    canonical = self.resolve_class_name(-1, {-1: k})
+                    for cid, cname in CLASS_NAMES.items():
+                        if cname.lower() == canonical.lower() or cname.lower() == k.lower():
+                            effective[cid] = v
+
+        return effective
+
+    def evaluate_condition(self, detections: List[Dict[str, Any]], confirmed_conf_threshold: float = 0.15) -> str:
         """
         Derives an overall road condition label from detected distresses.
+        Does not automatically classify low-confidence proposals (< 0.15) as real structural damage.
         """
         if not detections:
-            return "unknown"
+            return "good"
 
-        has_pothole = any((d.get("class_name") or "").lower() == "pothole" for d in detections)
-        has_crack = any((d.get("class_name") or "").lower() == "crack" for d in detections)
+        # Detections meeting the confirmed confidence threshold
+        confirmed_detections = [d for d in detections if d.get("confidence", 0) >= confirmed_conf_threshold]
+
+        if not confirmed_detections:
+            # All detections are tentative / low-confidence (< 15%).
+            # Flag as 'monitored' for inspection rather than confirmed active structural damage.
+            return "monitored"
+
+        has_pothole = any((d.get("class_name") or "").lower() == "pothole" for d in confirmed_detections)
+        has_crack = any((d.get("class_name") or "").lower() == "crack" for d in confirmed_detections)
 
         if has_pothole:
-            pothole_count = sum(1 for d in detections if (d.get("class_name") or "").lower() == "pothole")
+            pothole_count = sum(1 for d in confirmed_detections if (d.get("class_name") or "").lower() == "pothole")
             return "severe" if pothole_count > 1 else "damaged"
         if has_crack:
             return "damaged"
         return "good"
 
-    def analyze_image(self, image_path: Union[str, Path], conf: float = 0.20) -> Dict[str, Any]:
+    def analyze_image(
+        self,
+        image_path: Union[str, Path],
+        conf: Optional[float] = 0.20,
+        class_thresholds: Optional[Dict[Union[int, str], float]] = None,
+    ) -> Dict[str, Any]:
         """
-        Analyzes an image file for road damage (Pothole, Crack, Road_Patch).
+        Analyzes an image file for road damage (Pothole, Crack, Road_Patch)
+        with consistent per-class confidence thresholds.
 
         Returns:
-            dict containing status, message, detections list, and road_condition.
+            dict containing status, message, detections list, road_condition, and effective_thresholds.
         """
         path = Path(image_path)
         if not path.exists():
@@ -143,8 +202,12 @@ class RoadSenseModelService:
                 "status": "error",
                 "message": f"Image file not found: {image_path}",
                 "detections": [],
-                "road_condition": "unknown"
+                "road_condition": "unknown",
+                "effective_thresholds": {}
             }
+
+        effective_threshs = self.resolve_effective_thresholds(conf=conf, class_thresholds=class_thresholds)
+        thresh_dict = {CLASS_NAMES[c]: round(effective_threshs[c], 3) for c in effective_threshs}
 
         # Standby Mode: when trained weights are not yet integrated
         if not self.is_loaded or self.model is None:
@@ -155,36 +218,49 @@ class RoadSenseModelService:
                     "Empty detections returned until training is complete."
                 ),
                 "detections": [],
-                "road_condition": "unknown"
+                "road_condition": "unknown",
+                "effective_thresholds": thresh_dict
             }
 
         # Real YOLO inference (active when best_clean_303.pt is loaded)
         try:
-            conf_val = float(conf) if conf is not None else 0.20
-            results = self.model.predict(source=str(path), conf=conf_val, verbose=False)
+            # Predict at the minimum threshold across classes so YOLO does not prematurely drop valid proposals
+            min_conf = min(effective_threshs.values())
+            results = self.model.predict(source=str(path), conf=min_conf, verbose=False)
             detections = []
             for r in results:
                 boxes = r.boxes
                 for box in boxes:
                     cls_id = int(box.cls[0].item())
                     confidence = float(box.conf[0].item())
-                    # Format: [x1, y1, x2, y2]
+
+                    # Check against class-specific threshold
+                    cls_target_thresh = effective_threshs.get(cls_id, min_conf)
+                    if confidence < cls_target_thresh:
+                        continue
+
                     coords = [round(float(c), 2) for c in box.xyxy[0].tolist()]
                     cls_name = self.resolve_class_name(cls_id, getattr(r, "names", None))
+
+                    is_low_conf = confidence < 0.15
+                    tier = "confirmed" if confidence >= 0.20 else ("moderate" if confidence >= 0.15 else "tentative")
 
                     detections.append({
                         "class_id": cls_id,
                         "class_name": cls_name,
                         "confidence": round(confidence, 4),
-                        "bbox": coords
+                        "bbox": coords,
+                        "is_low_confidence": is_low_conf,
+                        "confidence_tier": tier,
                     })
 
-            condition = self.evaluate_condition(detections)
+            condition = self.evaluate_condition(detections, confirmed_conf_threshold=0.15)
             return {
                 "status": "success",
                 "message": f"Inference complete. {len(detections)} detection(s) found.",
                 "detections": detections,
-                "road_condition": condition
+                "road_condition": condition,
+                "effective_thresholds": thresh_dict
             }
         except Exception as e:
             logger.error(f"[RoadSenseModelService] Inference error: {e}")
@@ -192,51 +268,73 @@ class RoadSenseModelService:
                 "status": "error",
                 "message": f"Inference failed: {str(e)}",
                 "detections": [],
-                "road_condition": "unknown"
+                "road_condition": "unknown",
+                "effective_thresholds": thresh_dict
             }
 
-    def analyze_frame(self, frame_bytes: bytes, conf: float = 0.20) -> Dict[str, Any]:
+    def analyze_frame(
+        self,
+        frame_bytes: bytes,
+        conf: Optional[float] = 0.20,
+        class_thresholds: Optional[Dict[Union[int, str], float]] = None,
+    ) -> Dict[str, Any]:
         """
         Analyzes a single raw image frame (used by live camera streaming).
 
         Returns:
-            dict containing status, message, detections list, and road_condition.
+            dict containing status, message, detections list, road_condition, and effective_thresholds.
         """
+        effective_threshs = self.resolve_effective_thresholds(conf=conf, class_thresholds=class_thresholds)
+        thresh_dict = {CLASS_NAMES[c]: round(effective_threshs[c], 3) for c in effective_threshs}
+
         if not self.is_loaded or self.model is None:
             return {
                 "status": "pending_trained_model",
                 "message": "Live inference standby: YOLO weights pending.",
                 "detections": [],
-                "road_condition": "unknown"
+                "road_condition": "unknown",
+                "effective_thresholds": thresh_dict
             }
 
         try:
             import io
             from PIL import Image
             img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
-            
-            conf_val = float(conf) if conf is not None else 0.20
-            results = self.model.predict(source=img, conf=conf_val, verbose=False)
+
+            min_conf = min(effective_threshs.values())
+            results = self.model.predict(source=img, conf=min_conf, verbose=False)
             detections = []
             for r in results:
                 for box in r.boxes:
                     cls_id = int(box.cls[0].item())
                     confidence = float(box.conf[0].item())
+
+                    cls_target_thresh = effective_threshs.get(cls_id, min_conf)
+                    if confidence < cls_target_thresh:
+                        continue
+
                     coords = [round(float(c), 2) for c in box.xyxy[0].tolist()]
                     cls_name = self.resolve_class_name(cls_id, getattr(r, "names", None))
+
+                    is_low_conf = confidence < 0.15
+                    tier = "confirmed" if confidence >= 0.20 else ("moderate" if confidence >= 0.15 else "tentative")
+
                     detections.append({
                         "class_id": cls_id,
                         "class_name": cls_name,
                         "confidence": round(confidence, 4),
-                        "bbox": coords
+                        "bbox": coords,
+                        "is_low_confidence": is_low_conf,
+                        "confidence_tier": tier,
                     })
 
-            condition = self.evaluate_condition(detections)
+            condition = self.evaluate_condition(detections, confirmed_conf_threshold=0.15)
             return {
                 "status": "success",
                 "message": f"Frame analyzed. {len(detections)} detection(s) found.",
                 "detections": detections,
-                "road_condition": condition
+                "road_condition": condition,
+                "effective_thresholds": thresh_dict
             }
         except Exception as e:
             logger.error(f"[RoadSenseModelService] Frame inference error: {e}")
@@ -244,7 +342,8 @@ class RoadSenseModelService:
                 "status": "error",
                 "message": f"Frame inference failed: {str(e)}",
                 "detections": [],
-                "road_condition": "unknown"
+                "road_condition": "unknown",
+                "effective_thresholds": thresh_dict
             }
 
 

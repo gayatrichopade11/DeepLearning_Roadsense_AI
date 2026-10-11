@@ -100,6 +100,7 @@ export default function ResultCard({ result, showApiPayload = true }) {
   const detections = result.detections || [];
   const roadCondition = (result.road_condition || 'good').toLowerCase();
   const isDamaged = roadCondition === 'damaged' || roadCondition === 'severe';
+  const isMonitored = roadCondition === 'monitored';
 
   if (result.zero_detections || detections.length === 0) {
     return (
@@ -134,14 +135,18 @@ export default function ResultCard({ result, showApiPayload = true }) {
             <div className={`px-4 py-1.5 rounded-xl font-mono text-xs font-bold border flex items-center gap-2 ${
               isDamaged
                 ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                : isMonitored
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                 : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
             }`}>
               {isDamaged ? (
                 <AlertTriangle className="w-4 h-4 text-rose-400" />
+              ) : isMonitored ? (
+                <AlertTriangle className="w-4 h-4 text-amber-400" />
               ) : (
                 <CheckCircle2 className="w-4 h-4 text-emerald-400" />
               )}
-              <span>Road Condition: {isDamaged ? 'Damaged' : 'Good'}</span>
+              <span>Road Condition: {isDamaged ? 'Damaged' : isMonitored ? 'Monitored' : 'Good'}</span>
             </div>
           </div>
         </div>
@@ -189,6 +194,10 @@ export default function ResultCard({ result, showApiPayload = true }) {
     safetyStatus = 'UNSAFE';
     safetyReason = `Detected ${potholeCount > 0 ? `${potholeCount} pothole(s)` : ''}${potholeCount > 0 && crackCount > 0 ? ' and ' : ''}${crackCount > 0 ? `${crackCount} crack(s)` : ''} impacting pavement integrity.`;
     safetyRecommendation = 'Prioritize road section for inspection and scheduled maintenance.';
+  } else if (isMonitored) {
+    safetyStatus = 'CAUTION';
+    safetyReason = 'Tentative / low-confidence surface anomalies (< 15% certainty) detected. Flagged for visual inspection rather than immediate structural repair.';
+    safetyRecommendation = 'Perform on-site audit to verify whether detected features are active cracks or pavement shadows.';
   } else if (crackCount > 0) {
     safetyStatus = 'CAUTION';
     safetyReason = `Detected ${crackCount} surface crack(s). Surface fatigue observed.`;
@@ -287,6 +296,11 @@ export default function ResultCard({ result, showApiPayload = true }) {
                     <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${badgeClass}`}>
                       Class ID: {det.class_id ?? (isPothole ? 0 : isCrack ? 1 : 2)}
                     </span>
+                    {(det.is_low_confidence || conf < 0.15) && (
+                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border bg-amber-500/20 text-amber-300 border-amber-500/40 font-bold">
+                        Tentative
+                      </span>
+                    )}
                   </div>
                   <div className="text-2xl sm:text-3xl font-black text-white tracking-tight flex items-center gap-2 mt-1">
                     <span>{className}</span>
@@ -373,7 +387,11 @@ export default function ResultCard({ result, showApiPayload = true }) {
             Road Condition
           </span>
           <div className="text-lg font-bold text-white mt-0.5">
-            {isDamaged ? 'Surface Damage Detected' : 'Normal / Repaired Road Surface'}
+            {isDamaged
+              ? 'Surface Damage Detected'
+              : isMonitored
+              ? 'Surface Under Monitoring (Tentative)'
+              : 'Normal / Repaired Road Surface'}
           </div>
           <div className="text-xs text-slate-400 mt-0.5 font-mono">
             Backend Flag: <span className="text-slate-200 uppercase font-bold">{result.road_condition || 'unknown'}</span>
@@ -383,14 +401,18 @@ export default function ResultCard({ result, showApiPayload = true }) {
         <div className={`px-3 py-1.5 rounded-xl font-mono text-xs font-bold border flex items-center gap-1.5 ${
           isDamaged
             ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+            : isMonitored
+            ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
             : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
         }`}>
           {isDamaged ? (
             <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+          ) : isMonitored ? (
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
           ) : (
             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
           )}
-          <span>{isDamaged ? 'Damaged' : 'Good'}</span>
+          <span>{isDamaged ? 'Damaged' : isMonitored ? 'Monitored' : 'Good'}</span>
         </div>
       </div>
 

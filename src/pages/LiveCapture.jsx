@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   Camera, 
+  SwitchCamera,
   RefreshCw, 
   UploadCloud, 
   AlertTriangle, 
@@ -29,6 +30,10 @@ export default function LiveCapture() {
   const [isDemoMode, setIsDemoMode] = useState(false); // Default to Real Live AI Model
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const [videoDevices, setVideoDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const [facingMode, setFacingMode] = useState('environment'); // Prefer rear camera by default on mobile
+  const [isSwitchingCamera, setIsSwitchingCamera] = useState(false);
   const [capturedPhoto, setCapturedPhoto] = useState(null);
   const [uploadedVideoUrl, setUploadedVideoUrl] = useState(null);
   const [uploadedVideoName, setUploadedVideoName] = useState('');
@@ -58,85 +63,171 @@ export default function LiveCapture() {
     setIsCameraActive(false);
   }, []);
 
-  // Initialize camera feed via getUserMedia
-  const startCamera = useCallback(async () => {
+  // Enumerate connected video input devices
+  const enumerateVideoDevices = useCallback(async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return [];
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      setVideoDevices(videoInputs);
+      return videoInputs;
+    } catch (err) {
+      console.warn('Unable to enumerate video devices:', err);
+      return [];
+    }
+  }, []);
+
+  // Initialize or switch camera feed via getUserMedia
+  const startCamera = useCallback(async (targetDeviceId = null, targetFacingMode = null) => {
     setCameraError(null);
-    setCapturedPhoto(null);
+    setIsSwitchingCamera(true);
+
+    // Stop existing stream first to release hardware lock
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Camera API is not supported in this browser.');
+        throw new Error('Camera API (getUserMedia) is not supported in this browser.');
       }
 
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
+      // Configure video constraints
+      let constraints;
+      if (targetDeviceId) {
+        constraints = {
+          video: {
+            deviceId: { exact: targetDeviceId },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        };
+      } else {
+        const mode = targetFacingMode || facingMode || 'environment';
+        constraints = {
+          video: {
+            facingMode: { ideal: mode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        };
+      }
+
+      let mediaStream;
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (constraintErr) {
+        // Fallback for devices that reject specific resolution or exact deviceId constraints
+        console.warn('Preferred camera constraints failed, attempting fallback:', constraintErr);
+        if (targetDeviceId) {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { deviceId: targetDeviceId },
+            audio: false
+          });
+        } else {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: targetFacingMode || 'environment' },
+            audio: false
+          });
+        }
+      }
 
       streamRef.current = mediaStream;
       setIsCameraActive(true);
+
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        videoRef.current.play().catch((e) => console.warn('Video auto-play warning:', e));
       }
+
+      // Read active track metadata
+      const activeTrack = mediaStream.getVideoTracks()[0];
+      if (activeTrack) {
+        const settings = typeof activeTrack.getSettings === 'function' ? activeTrack.getSettings() : {};
+        if (settings.deviceId) {
+          setSelectedDeviceId(settings.deviceId);
+        }
+        if (settings.facingMode) {
+          setFacingMode(settings.facingMode);
+        } else if (targetFacingMode) {
+          setFacingMode(targetFacingMode);
+        }
+      }
+
+      // Re-enumerate to get full device labels (now that permission is granted)
+      await enumerateVideoDevices();
+
     } catch (err) {
       console.warn('Camera access issue:', err);
-      setCameraError('Camera access is unavailable. You can upload a road image or video instead.');
+      let userMsg = 'Camera access is unavailable. You can upload a road image or video instead.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        userMsg = 'Camera permission was denied. Please allow camera access in your browser settings to use live inspection.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        userMsg = 'No camera device found on this system. You can upload a road image or video instead.';
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        userMsg = 'Camera is currently in use by another application. Please close other camera apps and retry.';
+      } else if (err.name === 'OverconstrainedError') {
+        userMsg = 'Camera constraint could not be satisfied. Retrying with basic settings...';
+      }
+      setCameraError(userMsg);
+      setIsCameraActive(false);
+    } finally {
+      setIsSwitchingCamera(false);
     }
-  }, []);
+  }, [facingMode, enumerateVideoDevices]);
+
+  // Handle switching between front and rear cameras (or cycling available cameras)
+  const handleSwitchCamera = useCallback(async () => {
+    if (isSwitchingCamera) return;
+
+    if (videoDevices.length > 1) {
+      // Find current device and cycle to the next
+      const currentIndex = videoDevices.findIndex((d) => d.deviceId === selectedDeviceId);
+      const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % videoDevices.length : 0;
+      const nextDevice = videoDevices[nextIndex];
+
+      const label = (nextDevice.label || '').toLowerCase();
+      let nextMode = facingMode === 'environment' ? 'user' : 'environment';
+      if (label.includes('front') || label.includes('user')) nextMode = 'user';
+      if (label.includes('back') || label.includes('rear') || label.includes('environment')) nextMode = 'environment';
+
+      await startCamera(nextDevice.deviceId, nextMode);
+    } else {
+      // On mobile devices where facingMode controls front/back lens
+      const nextFacingMode = facingMode === 'environment' ? 'user' : 'environment';
+      setFacingMode(nextFacingMode);
+      await startCamera(null, nextFacingMode);
+    }
+  }, [isSwitchingCamera, videoDevices, selectedDeviceId, facingMode, startCamera]);
+
+  // Handle direct camera device selection from dropdown
+  const handleCameraSelect = useCallback(async (deviceId) => {
+    if (!deviceId || deviceId === selectedDeviceId || isSwitchingCamera) return;
+    const target = videoDevices.find((d) => d.deviceId === deviceId);
+    let targetMode = facingMode;
+    if (target) {
+      const lbl = (target.label || '').toLowerCase();
+      if (lbl.includes('front') || lbl.includes('user')) targetMode = 'user';
+      if (lbl.includes('back') || lbl.includes('rear') || lbl.includes('environment')) targetMode = 'environment';
+    }
+    await startCamera(deviceId, targetMode);
+  }, [selectedDeviceId, isSwitchingCamera, videoDevices, facingMode, startCamera]);
 
   useEffect(() => {
     let active = true;
 
     if (activeTab === 'camera') {
-      const initStream = async () => {
-        try {
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            throw new Error('Camera API is not supported in this browser.');
-          }
-
-          const mediaStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: { ideal: 'environment' },
-              width: { ideal: 1280 },
-              height: { ideal: 720 }
-            },
-            audio: false
-          });
-
-          if (!active) {
-            mediaStream.getTracks().forEach((track) => track.stop());
-            return;
-          }
-
-          streamRef.current = mediaStream;
-          setIsCameraActive(true);
-          if (videoRef.current) {
-            videoRef.current.srcObject = mediaStream;
-          }
-        } catch (err) {
-          if (!active) return;
-          console.warn('Camera access issue:', err);
-          setCameraError('Camera access is unavailable. You can upload a road image or video instead.');
-        }
-      };
-
-      initStream();
+      startCamera();
     } else {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
+      stopCamera();
     }
 
     return () => {
       active = false;
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
+      stopCamera();
     };
   }, [activeTab]);
 
@@ -421,9 +512,49 @@ export default function LiveCapture() {
             </button>
           </div>
 
-          {/* Action Buttons: Start/Stop Detection & Capture */}
+          {/* Action Buttons: Start/Stop Detection, Switch Camera & Capture */}
           <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
             
+            {/* Camera Switch Controls (Only on Camera tab when not viewing captured photo) */}
+            {activeTab === 'camera' && !capturedPhoto && (
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Switch Camera Button */}
+                <button
+                  type="button"
+                  onClick={handleSwitchCamera}
+                  disabled={isSwitchingCamera || !isCameraActive}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-mono font-bold bg-navy-850 hover:bg-navy-750 text-slate-200 border border-slate-700 hover:border-cyber-cyan/50 shadow-sm transition-all disabled:opacity-50"
+                  title={facingMode === 'environment' ? 'Switch to Front Camera' : 'Switch to Rear Camera'}
+                >
+                  <SwitchCamera className={`w-3.5 h-3.5 text-cyber-cyan ${isSwitchingCamera ? 'animate-spin' : ''}`} />
+                  <span>Switch Camera</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-navy-950 text-cyber-cyan border border-cyber-cyan/30 uppercase font-semibold">
+                    {facingMode === 'environment' ? 'Rear' : 'Front'}
+                  </span>
+                </button>
+
+                {/* Multiple Cameras Dropdown (For laptops/desktops with multiple webcams) */}
+                {videoDevices.length > 1 && (
+                  <div className="flex items-center gap-1.5 bg-navy-900/90 px-3 py-1.5 rounded-xl border border-slate-800 text-xs font-mono">
+                    <Camera className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+                    <select
+                      value={selectedDeviceId}
+                      onChange={(e) => handleCameraSelect(e.target.value)}
+                      disabled={isSwitchingCamera}
+                      className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer max-w-[150px] sm:max-w-[200px] truncate"
+                      aria-label="Select camera device"
+                    >
+                      {videoDevices.map((dev, idx) => (
+                        <option key={dev.deviceId || idx} value={dev.deviceId} className="bg-navy-900 text-slate-200">
+                          {dev.label || `Camera ${idx + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Start / Stop Detection Button */}
             <button
               type="button"
@@ -517,16 +648,24 @@ export default function LiveCapture() {
                       </div>
                       <h3 className="text-lg font-bold text-white">Camera Access Unavailable</h3>
                       <p className="text-xs text-slate-300 leading-relaxed">
-                        Camera access is unavailable. You can upload a road image or video instead, or use a benchmark sample below.
+                        {cameraError}
                       </p>
-                      <div className="flex justify-center gap-2 pt-2">
+                      <div className="flex flex-wrap justify-center gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => startCamera()}
+                          className="px-4 py-2 rounded-lg text-xs font-mono font-bold bg-cyber-blue text-white shadow-glow-blue flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Retry Camera</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
                             setCapturedPhoto('/images/crack_sample.jpg');
                             setFrameDims({ width: 640, height: 480 });
                           }}
-                          className="px-4 py-2 rounded-lg text-xs font-mono font-bold bg-cyber-blue text-white shadow-glow-blue"
+                          className="px-4 py-2 rounded-lg text-xs font-mono font-semibold bg-navy-800 text-slate-200 border border-slate-700"
                         >
                           Load Sample Frame
                         </button>
@@ -539,13 +678,28 @@ export default function LiveCapture() {
                       </div>
                     </div>
                   ) : (
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      className="w-full h-full object-cover"
-                    />
+                    <>
+                      <video
+                        ref={videoRef}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-cover"
+                      />
+                      {/* In-Viewport Quick Flip Camera Button */}
+                      {!capturedPhoto && isCameraActive && (
+                        <button
+                          type="button"
+                          onClick={handleSwitchCamera}
+                          disabled={isSwitchingCamera}
+                          className="absolute top-12 right-3 z-10 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-navy-950/85 backdrop-blur-md border border-slate-700/80 hover:border-cyber-cyan/60 text-slate-200 text-xs font-mono transition-all shadow-lg active:scale-95 hover:bg-navy-900"
+                          title={facingMode === 'environment' ? 'Switch to Front Camera' : 'Switch to Rear Camera'}
+                        >
+                          <SwitchCamera className={`w-3.5 h-3.5 text-cyber-cyan ${isSwitchingCamera ? 'animate-spin' : ''}`} />
+                          <span className="hidden sm:inline">Flip ({facingMode === 'environment' ? 'Rear' : 'Front'})</span>
+                        </button>
+                      )}
+                    </>
                   )
                 ) : (
                   /* 3. Uploaded Video View */
@@ -669,7 +823,7 @@ export default function LiveCapture() {
                 <div className="absolute top-3 left-3 right-3 flex items-center justify-between text-[11px] font-mono pointer-events-none">
                   <div className="flex items-center gap-2 bg-navy-950/85 backdrop-blur-md px-2.5 py-1 rounded-md border border-slate-700 text-slate-300">
                     <span className={`w-2 h-2 rounded-full ${isDetecting ? 'bg-emerald-400' : 'bg-rose-500'} animate-pulse`} />
-                    <span>OPTICAL FEED: {capturedPhoto ? 'STILL FRAME' : activeTab === 'video' ? (uploadedVideoName || 'VIDEO STREAM') : isCameraActive ? 'LIVE CAMERA STREAM' : 'CAMERA STANDBY'}</span>
+                    <span>OPTICAL FEED: {capturedPhoto ? 'STILL FRAME' : activeTab === 'video' ? (uploadedVideoName || 'VIDEO STREAM') : isCameraActive ? `LIVE CAMERA (${facingMode === 'environment' ? 'REAR' : 'FRONT'})` : 'CAMERA STANDBY'}</span>
                   </div>
 
                   <div className="flex items-center gap-2 bg-navy-950/85 backdrop-blur-md px-2.5 py-1 rounded-md border border-cyber-cyan/40 text-cyber-cyan">

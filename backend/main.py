@@ -104,11 +104,15 @@ def health_check():
 async def analyze_image(
     request: Request,
     file: UploadFile = File(..., description="Road pavement image file"),
-    conf: Optional[float] = Query(default=0.20, ge=0.01, le=1.0, description="Confidence threshold"),
+    conf: Optional[float] = Query(default=0.20, ge=0.01, le=1.0, description="Global confidence threshold"),
+    conf_pothole: Optional[float] = Query(default=None, ge=0.01, le=1.0, description="Optional per-class threshold for Pothole"),
+    conf_crack: Optional[float] = Query(default=None, ge=0.01, le=1.0, description="Optional per-class threshold for Crack"),
+    conf_road_patch: Optional[float] = Query(default=None, ge=0.01, le=1.0, description="Optional per-class threshold for Road_Patch"),
 ):
     """
-    Upload and analyze a single road image for distresses (Asphalt, Crack, Pothole).
+    Upload and analyze a single road image for distresses (Pothole, Crack, Road_Patch).
     Saves file safely to backend/uploads/ and delegates to model_service.
+    Supports both global and fine-grained per-class sensitivity thresholds.
     """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided in upload.")
@@ -135,8 +139,21 @@ async def analyze_image(
     finally:
         file.file.close()
 
-    # Delegate to model service with configured confidence threshold
-    analysis = model_service.analyze_image(saved_filepath, conf=conf if conf is not None else 0.20)
+    # Build per-class threshold overrides if provided
+    class_thresholds = {}
+    if conf_pothole is not None:
+        class_thresholds["Pothole"] = conf_pothole
+    if conf_crack is not None:
+        class_thresholds["Crack"] = conf_crack
+    if conf_road_patch is not None:
+        class_thresholds["Road_Patch"] = conf_road_patch
+
+    # Delegate to model service with configured confidence thresholds
+    analysis = model_service.analyze_image(
+        saved_filepath,
+        conf=conf if conf is not None else 0.20,
+        class_thresholds=class_thresholds if class_thresholds else None,
+    )
 
     # Construct public image URL
     base_url = str(request.base_url).rstrip("/")
@@ -150,6 +167,7 @@ async def analyze_image(
         saved_path=str(saved_filepath),
         detections=analysis.get("detections", []),
         road_condition=analysis.get("road_condition", "unknown"),
+        effective_thresholds=analysis.get("effective_thresholds", {}),
     )
 
 
@@ -211,11 +229,15 @@ async def analyze_video(
 )
 async def analyze_frame(
     file: UploadFile = File(..., description="Live camera snapshot frame"),
-    conf: Optional[float] = Query(default=0.20, ge=0.01, le=1.0, description="Confidence threshold"),
+    conf: Optional[float] = Query(default=0.20, ge=0.01, le=1.0, description="Global confidence threshold"),
+    conf_pothole: Optional[float] = Query(default=None, ge=0.01, le=1.0, description="Optional per-class threshold for Pothole"),
+    conf_crack: Optional[float] = Query(default=None, ge=0.01, le=1.0, description="Optional per-class threshold for Crack"),
+    conf_road_patch: Optional[float] = Query(default=None, ge=0.01, le=1.0, description="Optional per-class threshold for Road_Patch"),
 ):
     """
     Accepts a single live camera frame from browser MediaDevices stream.
     Designed for real-time periodic polling without saving files to disk.
+    Supports both global and fine-grained per-class sensitivity thresholds.
     """
     if not file.filename:
         file.filename = "live_frame.jpg"
@@ -234,7 +256,19 @@ async def analyze_frame(
     finally:
         file.file.close()
 
-    analysis = model_service.analyze_frame(contents, conf=conf if conf is not None else 0.20)
+    class_thresholds = {}
+    if conf_pothole is not None:
+        class_thresholds["Pothole"] = conf_pothole
+    if conf_crack is not None:
+        class_thresholds["Crack"] = conf_crack
+    if conf_road_patch is not None:
+        class_thresholds["Road_Patch"] = conf_road_patch
+
+    analysis = model_service.analyze_frame(
+        contents,
+        conf=conf if conf is not None else 0.20,
+        class_thresholds=class_thresholds if class_thresholds else None,
+    )
 
     return ImageAnalysisResponse(
         filename=file.filename,
@@ -244,6 +278,7 @@ async def analyze_frame(
         saved_path=None,
         detections=analysis.get("detections", []),
         road_condition=analysis.get("road_condition", "unknown"),
+        effective_thresholds=analysis.get("effective_thresholds", {}),
     )
 
 

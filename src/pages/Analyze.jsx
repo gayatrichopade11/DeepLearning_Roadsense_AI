@@ -8,7 +8,8 @@ import {
   Scan, 
   RefreshCw, 
   Sliders, 
-  Info
+  Info,
+  AlertTriangle
 } from 'lucide-react';
 import ResultCard from '../components/ResultCard';
 import { API_ENDPOINTS, getApiBaseUrl } from '../utils/apiConfig';
@@ -140,15 +141,19 @@ export default function Analyze() {
 
         boxes = apiData.detections.map((det) => {
           const [x1, y1, x2, y2] = det.bbox;
+          const isTentative = det.is_low_confidence || det.confidence < 0.15;
           const labelName = (det.class_name || 'Damage').toUpperCase();
+          const prefix = isTentative ? '[TENTATIVE] ' : '';
           return {
             top: `${((y1 / natH) * 100).toFixed(2)}%`,
             left: `${((x1 / natW) * 100).toFixed(2)}%`,
             width: `${(((x2 - x1) / natW) * 100).toFixed(2)}%`,
             height: `${(((y2 - y1) / natH) * 100).toFixed(2)}%`,
-            label: `${labelName} ${(det.confidence * 100).toFixed(1)}%`,
+            label: `${prefix}${labelName} ${(det.confidence * 100).toFixed(1)}%`,
             class_name: det.class_name,
             confidence: det.confidence,
+            is_low_confidence: isTentative,
+            confidence_tier: det.confidence_tier || (isTentative ? 'tentative' : 'confirmed'),
             bbox: det.bbox,
           };
         });
@@ -313,27 +318,33 @@ export default function Analyze() {
                     )}
 
                     {/* Render bounding boxes if analysis completed and boxes exist */}
-                    {analysisResult && analysisResult.boxes && analysisResult.boxes.map((box, bIdx) => (
-                      <div
-                        key={bIdx}
-                        className="absolute border-2 border-cyber-cyan bg-cyber-cyan/15 rounded-sm pointer-events-none transition-all duration-300"
-                        style={{
-                          top: box.top,
-                          left: box.left,
-                          width: box.width,
-                          height: box.height,
-                        }}
-                      >
-                        <div className="bbox-corner-tl" />
-                        <div className="bbox-corner-tr" />
-                        <div className="bbox-corner-bl" />
-                        <div className="bbox-corner-br" />
+                    {analysisResult && analysisResult.boxes && analysisResult.boxes.map((box, bIdx) => {
+                      const isTentative = box.is_low_confidence || box.confidence < 0.15;
+                      const borderClass = isTentative ? 'border-amber-400 bg-amber-400/15' : 'border-cyber-cyan bg-cyber-cyan/15';
+                      const badgeClass = isTentative ? 'bg-amber-400 text-navy-950' : 'bg-cyber-cyan text-navy-950';
 
-                        <div className="absolute -top-6 left-0 px-2 py-0.5 rounded font-mono font-bold text-[10px] bg-cyber-cyan text-navy-950 shadow-lg">
-                          {box.label}
+                      return (
+                        <div
+                          key={bIdx}
+                          className={`absolute border-2 rounded-sm pointer-events-none transition-all duration-300 ${borderClass}`}
+                          style={{
+                            top: box.top,
+                            left: box.left,
+                            width: box.width,
+                            height: box.height,
+                          }}
+                        >
+                          <div className="bbox-corner-tl" />
+                          <div className="bbox-corner-tr" />
+                          <div className="bbox-corner-bl" />
+                          <div className="bbox-corner-br" />
+
+                          <div className={`absolute -top-6 left-0 px-2 py-0.5 rounded font-mono font-bold text-[10px] shadow-lg ${badgeClass}`}>
+                            {box.label}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
 
                     <div className="absolute top-3 left-3 bg-navy-950/80 backdrop-blur-md px-3 py-1 rounded text-xs font-mono text-slate-300 border border-slate-700">
                       {imageName || 'road_sample.jpg'}
@@ -386,7 +397,7 @@ export default function Analyze() {
               </div>
 
               {/* Model Confidence Sensitivity Slider */}
-              <div className="p-3.5 rounded-xl bg-navy-950/70 border border-slate-800 text-xs font-mono space-y-2">
+              <div className="p-3.5 rounded-xl bg-navy-950/70 border border-slate-800 text-xs font-mono space-y-2.5">
                 <div className="flex items-center justify-between text-slate-300">
                   <span className="flex items-center gap-1.5 text-slate-400">
                     <Sliders className="w-3.5 h-3.5 text-cyber-cyan" />
@@ -397,10 +408,10 @@ export default function Analyze() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-[10px] text-slate-500">10%</span>
+                  <span className="text-[10px] text-slate-500">5%</span>
                   <input
                     type="range"
-                    min="0.10"
+                    min="0.05"
                     max="0.50"
                     step="0.05"
                     value={confidenceThreshold}
@@ -412,9 +423,22 @@ export default function Analyze() {
                   <span className="text-[10px] text-slate-500">50%</span>
                 </div>
                 <div className="text-[10px] text-slate-500 flex justify-between">
-                  <span>High Recall (Subtle defects)</span>
-                  <span>High Precision</span>
+                  <span>High Recall (5% Subtle / Faint)</span>
+                  <span>High Precision (50%)</span>
                 </div>
+
+                {/* High Sensitivity Notice Alert (Requirement 4) */}
+                {confidenceThreshold < 0.15 && (
+                  <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/40 text-[11px] font-sans text-amber-200/90 flex items-start gap-2 animate-in fade-in duration-200">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-amber-300 font-mono text-[10px] block uppercase tracking-wide">
+                        High Sensitivity Notice (&lt;15%)
+                      </strong>
+                      Lower thresholds detect subtle and faint defects, but significantly increase false positive proposals on normal road textures, aggregate, and shadows. Low-confidence proposals are flagged as tentative.
+                    </div>
+                  </div>
+                )}
               </div>
 
               {!analysisResult ? (
