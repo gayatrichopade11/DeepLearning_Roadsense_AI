@@ -20,6 +20,7 @@ export default function Analyze() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [confidenceThreshold, setConfidenceThreshold] = useState(0.20);
   const fileInputRef = useRef(null);
 
   // Real representative benchmark presets from the project dataset
@@ -113,7 +114,7 @@ export default function Analyze() {
       const formData = new FormData();
       formData.append('file', fileToSend);
 
-      const API_URL = API_ENDPOINTS.ANALYZE_IMAGE();
+      const API_URL = API_ENDPOINTS.ANALYZE_IMAGE(confidenceThreshold);
       const response = await fetch(API_URL, {
         method: 'POST',
         body: formData,
@@ -139,12 +140,13 @@ export default function Analyze() {
 
         boxes = apiData.detections.map((det) => {
           const [x1, y1, x2, y2] = det.bbox;
+          const labelName = (det.class_name || 'Damage').toUpperCase();
           return {
             top: `${((y1 / natH) * 100).toFixed(2)}%`,
             left: `${((x1 / natW) * 100).toFixed(2)}%`,
             width: `${(((x2 - x1) / natW) * 100).toFixed(2)}%`,
             height: `${(((y2 - y1) / natH) * 100).toFixed(2)}%`,
-            label: `${det.class_name.toUpperCase()} ${(det.confidence * 100).toFixed(1)}%`,
+            label: `${labelName} ${(det.confidence * 100).toFixed(1)}%`,
             class_name: det.class_name,
             confidence: det.confidence,
             bbox: det.bbox,
@@ -156,14 +158,15 @@ export default function Analyze() {
       const hasDetections = detectionsList.length > 0;
 
       setAnalysisResult({
-        status: 'success',
+        status: apiData.status || (hasDetections ? 'success' : 'no_damage_detected'),
         message: apiData.message || (hasDetections ? `Inference complete. ${detectionsList.length} detection(s) found.` : 'No road damage detected by the current model.'),
         detections: detectionsList,
         boxes: boxes,
-        road_condition: apiData.road_condition || 'good',
+        road_condition: apiData.road_condition || (hasDetections ? 'damaged' : 'good'),
         image_url: apiData.image_url,
         raw_api_response: apiData,
         zero_detections: !hasDetections,
+        confidence_threshold: confidenceThreshold,
       });
     } catch (err) {
       console.error('Backend API request error:', err);
@@ -380,6 +383,38 @@ export default function Analyze() {
                 <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-slate-800 text-slate-300 border border-slate-700">
                   {analysisResult ? 'ANALYSIS COMPLETE' : 'AWAITING INPUT'}
                 </span>
+              </div>
+
+              {/* Model Confidence Sensitivity Slider */}
+              <div className="p-3.5 rounded-xl bg-navy-950/70 border border-slate-800 text-xs font-mono space-y-2">
+                <div className="flex items-center justify-between text-slate-300">
+                  <span className="flex items-center gap-1.5 text-slate-400">
+                    <Sliders className="w-3.5 h-3.5 text-cyber-cyan" />
+                    <span>Sensitivity Threshold:</span>
+                  </span>
+                  <span className="font-bold text-cyber-cyan bg-navy-900 px-2 py-0.5 rounded border border-slate-800">
+                    {Math.round(confidenceThreshold * 100)}% ({confidenceThreshold.toFixed(2)})
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-slate-500">10%</span>
+                  <input
+                    type="range"
+                    min="0.10"
+                    max="0.50"
+                    step="0.05"
+                    value={confidenceThreshold}
+                    onChange={(e) => setConfidenceThreshold(parseFloat(e.target.value))}
+                    disabled={isAnalyzing}
+                    className="w-full accent-cyber-cyan cursor-pointer h-1.5 bg-slate-800 rounded-lg"
+                    aria-label="Confidence threshold slider"
+                  />
+                  <span className="text-[10px] text-slate-500">50%</span>
+                </div>
+                <div className="text-[10px] text-slate-500 flex justify-between">
+                  <span>High Recall (Subtle defects)</span>
+                  <span>High Precision</span>
+                </div>
               </div>
 
               {!analysisResult ? (

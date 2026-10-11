@@ -88,6 +88,31 @@ class RoadSenseModelService:
             self.is_loaded = False
             return False
 
+    def resolve_class_name(self, cls_id: int, model_names: Optional[Dict[int, str]] = None) -> str:
+        """
+        Dynamically resolves and canonicalizes class names from model output,
+        safely mapping aliases (e.g. 'asphalt' -> 'Road_Patch') and casing.
+        """
+        raw_name = ""
+        if model_names and cls_id in model_names:
+            raw_name = str(model_names[cls_id]).strip()
+        elif self.model and hasattr(self.model, "names") and cls_id in self.model.names:
+            raw_name = str(self.model.names[cls_id]).strip()
+        elif cls_id in CLASS_NAMES:
+            raw_name = CLASS_NAMES[cls_id]
+        else:
+            raw_name = f"class_{cls_id}"
+
+        # Canonicalize aliases
+        lower = raw_name.lower().replace("-", "_").replace(" ", "_")
+        if lower in ["pothole", "potholes"]:
+            return "Pothole"
+        elif lower in ["crack", "cracks"]:
+            return "Crack"
+        elif lower in ["road_patch", "roadpatch", "asphalt", "patch", "patches"]:
+            return "Road_Patch"
+        return raw_name
+
     def evaluate_condition(self, detections: List[Dict[str, Any]]) -> str:
         """
         Derives an overall road condition label from detected distresses.
@@ -95,16 +120,17 @@ class RoadSenseModelService:
         if not detections:
             return "unknown"
 
-        has_pothole = any(d.get("class_name") == "Pothole" for d in detections)
-        has_crack = any(d.get("class_name") == "Crack" for d in detections)
+        has_pothole = any((d.get("class_name") or "").lower() == "pothole" for d in detections)
+        has_crack = any((d.get("class_name") or "").lower() == "crack" for d in detections)
 
         if has_pothole:
-            return "severe" if len([d for d in detections if d.get("class_name") == "Pothole"]) > 1 else "damaged"
+            pothole_count = sum(1 for d in detections if (d.get("class_name") or "").lower() == "pothole")
+            return "severe" if pothole_count > 1 else "damaged"
         if has_crack:
             return "damaged"
         return "good"
 
-    def analyze_image(self, image_path: Union[str, Path], conf: float = 0.25) -> Dict[str, Any]:
+    def analyze_image(self, image_path: Union[str, Path], conf: float = 0.20) -> Dict[str, Any]:
         """
         Analyzes an image file for road damage (Pothole, Crack, Road_Patch).
 
@@ -134,7 +160,8 @@ class RoadSenseModelService:
 
         # Real YOLO inference (active when best_clean_303.pt is loaded)
         try:
-            results = self.model.predict(source=str(path), conf=conf, verbose=False)
+            conf_val = float(conf) if conf is not None else 0.20
+            results = self.model.predict(source=str(path), conf=conf_val, verbose=False)
             detections = []
             for r in results:
                 boxes = r.boxes
@@ -143,7 +170,7 @@ class RoadSenseModelService:
                     confidence = float(box.conf[0].item())
                     # Format: [x1, y1, x2, y2]
                     coords = [round(float(c), 2) for c in box.xyxy[0].tolist()]
-                    cls_name = CLASS_NAMES.get(cls_id, r.names.get(cls_id, f"class_{cls_id}"))
+                    cls_name = self.resolve_class_name(cls_id, getattr(r, "names", None))
 
                     detections.append({
                         "class_id": cls_id,
@@ -168,7 +195,7 @@ class RoadSenseModelService:
                 "road_condition": "unknown"
             }
 
-    def analyze_frame(self, frame_bytes: bytes, conf: float = 0.25) -> Dict[str, Any]:
+    def analyze_frame(self, frame_bytes: bytes, conf: float = 0.20) -> Dict[str, Any]:
         """
         Analyzes a single raw image frame (used by live camera streaming).
 
@@ -188,14 +215,15 @@ class RoadSenseModelService:
             from PIL import Image
             img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
             
-            results = self.model.predict(source=img, conf=conf, verbose=False)
+            conf_val = float(conf) if conf is not None else 0.20
+            results = self.model.predict(source=img, conf=conf_val, verbose=False)
             detections = []
             for r in results:
                 for box in r.boxes:
                     cls_id = int(box.cls[0].item())
                     confidence = float(box.conf[0].item())
                     coords = [round(float(c), 2) for c in box.xyxy[0].tolist()]
-                    cls_name = CLASS_NAMES.get(cls_id, r.names.get(cls_id, f"class_{cls_id}"))
+                    cls_name = self.resolve_class_name(cls_id, getattr(r, "names", None))
                     detections.append({
                         "class_id": cls_id,
                         "class_name": cls_name,

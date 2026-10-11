@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -104,6 +104,7 @@ def health_check():
 async def analyze_image(
     request: Request,
     file: UploadFile = File(..., description="Road pavement image file"),
+    conf: Optional[float] = Query(default=0.20, ge=0.01, le=1.0, description="Confidence threshold"),
 ):
     """
     Upload and analyze a single road image for distresses (Asphalt, Crack, Pothole).
@@ -134,8 +135,8 @@ async def analyze_image(
     finally:
         file.file.close()
 
-    # Delegate to model service
-    analysis = model_service.analyze_image(saved_filepath)
+    # Delegate to model service with configured confidence threshold
+    analysis = model_service.analyze_image(saved_filepath, conf=conf if conf is not None else 0.20)
 
     # Construct public image URL
     base_url = str(request.base_url).rstrip("/")
@@ -210,6 +211,7 @@ async def analyze_video(
 )
 async def analyze_frame(
     file: UploadFile = File(..., description="Live camera snapshot frame"),
+    conf: Optional[float] = Query(default=0.20, ge=0.01, le=1.0, description="Confidence threshold"),
 ):
     """
     Accepts a single live camera frame from browser MediaDevices stream.
@@ -232,7 +234,7 @@ async def analyze_frame(
     finally:
         file.file.close()
 
-    analysis = model_service.analyze_frame(contents)
+    analysis = model_service.analyze_frame(contents, conf=conf if conf is not None else 0.20)
 
     return ImageAnalysisResponse(
         filename=file.filename,

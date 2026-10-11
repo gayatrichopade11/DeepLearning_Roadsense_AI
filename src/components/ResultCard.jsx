@@ -69,6 +69,32 @@ export default function ResultCard({ result, showApiPayload = true }) {
   }
 
   // -------------------------------------------------------------------------
+  // 1b. BACKEND PENDING MODEL WEIGHTS STANDBY STATE
+  // -------------------------------------------------------------------------
+  if (result.status === 'pending_trained_model') {
+    return (
+      <div className="p-6 rounded-2xl bg-amber-950/30 border border-amber-600/60 text-center space-y-4 animate-in fade-in duration-300">
+        <div className="w-14 h-14 rounded-2xl bg-amber-900/40 border border-amber-500/60 flex items-center justify-center text-amber-400 mx-auto shadow-inner">
+          <AlertTriangle className="w-7 h-7" />
+        </div>
+        <div>
+          <h3 className="text-base font-bold text-amber-300 font-mono">
+            Model Weights Standby Mode
+          </h3>
+          <p className="text-xs text-slate-300 mt-1 max-w-md mx-auto leading-relaxed">
+            {result.message || 'YOLO model weights are pending deployment on the backend server.'}
+          </p>
+        </div>
+        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-navy-950 border border-slate-800 text-[11px] font-mono text-slate-400">
+          <code className="text-cyber-cyan">ml/models/best_clean_303.pt</code>
+          <span>→</span>
+          <span className="text-amber-400">Standby</span>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------------------
   // 2. ZERO DETECTIONS STATE (Requirement 12)
   // -------------------------------------------------------------------------
   const detections = result.detections || [];
@@ -147,9 +173,12 @@ export default function ResultCard({ result, showApiPayload = true }) {
   // -------------------------------------------------------------------------
   // 3. ONE OR MORE DETECTIONS (Requirement 6, 7, 8, 9, 10)
   // -------------------------------------------------------------------------
-  const potholeCount = detections.filter(d => d.class_name === 'Pothole').length;
-  const crackCount = detections.filter(d => d.class_name === 'Crack').length;
-  const patchCount = detections.filter(d => d.class_name === 'Road_Patch').length;
+  const potholeCount = detections.filter(d => (d.class_name || '').toLowerCase() === 'pothole').length;
+  const crackCount = detections.filter(d => (d.class_name || '').toLowerCase() === 'crack').length;
+  const patchCount = detections.filter(d => {
+    const c = (d.class_name || '').toLowerCase();
+    return c === 'road_patch' || c === 'patch' || c === 'asphalt';
+  }).length;
 
   // Road safety assessment based strictly on detections
   let safetyStatus = 'SAFE';
@@ -227,8 +256,9 @@ export default function ResultCard({ result, showApiPayload = true }) {
           const heightPx = Math.round(Math.max(0, y2 - y1));
           const areaPx = widthPx * heightPx;
 
-          const isPothole = className === 'Pothole';
-          const isCrack = className === 'Crack';
+          const normClass = (className || '').toLowerCase();
+          const isPothole = normClass === 'pothole';
+          const isCrack = normClass === 'crack';
 
           const badgeClass = isPothole
             ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'

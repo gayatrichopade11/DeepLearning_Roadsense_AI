@@ -20,14 +20,18 @@ export function getApiBaseUrl() {
     return envUrl.trim().replace(/\/+$/, '');
   }
 
-  // If in browser on Vercel deployment or any HTTPS production host,
-  // automatically fallback to the active Render backend URL.
+  // If running in browser and NOT on local machine, always connect to production Render backend
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
     const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0';
-    if (!isLocalhost && (hostname.includes('vercel.app') || window.location.protocol === 'https:')) {
+    if (!isLocalhost) {
       return DEFAULT_RENDER_BACKEND_URL;
     }
+  }
+
+  // In production bundle builds, always point to the production Render backend
+  if (import.meta.env?.PROD) {
+    return DEFAULT_RENDER_BACKEND_URL;
   }
 
   return DEFAULT_LOCAL_BACKEND_URL;
@@ -44,7 +48,7 @@ export function getApiEndpoint(path) {
 
 export const API_ENDPOINTS = {
   HEALTH: () => getApiEndpoint('/health'),
-  ANALYZE_IMAGE: () => getApiEndpoint('/api/analyze/image'),
-  ANALYZE_FRAME: () => getApiEndpoint('/api/analyze/frame'),
+  ANALYZE_IMAGE: (conf) => getApiEndpoint(conf !== undefined ? `/api/analyze/image?conf=${conf}` : '/api/analyze/image'),
+  ANALYZE_FRAME: (conf) => getApiEndpoint(conf !== undefined ? `/api/analyze/frame?conf=${conf}` : '/api/analyze/frame'),
   ANALYZE_VIDEO: () => getApiEndpoint('/api/analyze/video'),
 };
